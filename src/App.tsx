@@ -1,18 +1,15 @@
 import { useOrder, useQuote } from '@omni-network/react'
 import {
   useConnectWallet,
-  useFundWallet,
   usePrivy,
   useWallets,
 } from '@privy-io/react-auth'
 import { useSetActiveWallet } from '@privy-io/wagmi'
-import { formatEther, parseEther, zeroAddress } from 'viem'
+import { formatEther, type Hex, parseEther, zeroAddress } from 'viem'
 import { baseSepolia, holesky } from 'viem/chains'
 import {
   useAccount,
   useBalance,
-  useConnect,
-  useDisconnect,
   useSwitchChain,
 } from 'wagmi'
 import { Heading } from './components'
@@ -21,10 +18,9 @@ import { shortenAddress } from './utils'
 function App() {
   return (
     <>
-      <Account />
+      <Privy />
       <Quote />
       <Order />
-      <Privy />
     </>
   )
 }
@@ -34,12 +30,11 @@ function Privy() {
   const { ready, authenticated, login } = usePrivy()
   const { connectWallet } = useConnectWallet()
   const { wallets, ready: walletsReady } = useWallets()
-  const { fundWallet } = useFundWallet()
 
   // wagmi hooks
   const account = useAccount()
   const { setActiveWallet } = useSetActiveWallet()
-  const { data, isLoading } = useBalance({ address: account.address })
+  const { data, isLoading } = useBalance({ address: account.address, chainId: holesky.id })
 
   if (!ready || !walletsReady) {
     return (
@@ -90,10 +85,10 @@ function Privy() {
               ) : (
                 <br />
               )}
-              <div>privy wallet: {shortenAddress(wallet.address)}</div>
+              <div>privy wallet: {wallet.address}</div>
+              {/* <div>privy wallet: {shortenAddress(wallet.address)}</div> */}
               <div>wallet type: {wallet.walletClientType}</div>
               {wallet.address !== account.address ? (
-                <>
                   <button
                     onClick={() => {
                       setActiveWallet(wallet)
@@ -102,23 +97,10 @@ function Privy() {
                   >
                     Make active
                   </button>
-                  {wallet.walletClientType === 'privy' && (
-                    <button
-                      onClick={() =>
-                        fundWallet(wallet.address, {
-                          chain: baseSepolia,
-                          amount: '0.01',
-                        })
-                      }
-                      type="button"
-                    >
-                      Fund privy wallet
-                    </button>
-                  )}
-                </>
+
               ) : (
                 <div>
-                  balance (via wagmi):{' '}
+                  balance:
                   {isLoading ? 'loading...' : data?.formatted}
                 </div>
               )}
@@ -139,51 +121,11 @@ function Privy() {
   )
 }
 
-function Account() {
-  const account = useAccount()
-  const { connectors, connect } = useConnect()
-  const { disconnect } = useDisconnect()
-
-  return (
-    <div>
-      <Heading title="Account" />
-
-      <div>
-        account: {account.address}
-        <br />
-        chainId: {account.chainId}
-        <br />
-        status: {account.status}
-      </div>
-
-      {account.status !== 'disconnected' ? (
-        <button type="button" onClick={() => disconnect()}>
-          Disconnect
-        </button>
-      ) : (
-        connectors.map((connector) => (
-          <button
-            key={connector.uid}
-            onClick={() =>
-              connect({
-                connector,
-              })
-            }
-            type="button"
-          >
-            {connector.name}
-          </button>
-        ))
-      )}
-    </div>
-  )
-}
-
 function Quote() {
   const account = useAccount()
   const quote = useQuote({
-    srcChainId: baseSepolia.id,
-    destChainId: holesky.id,
+    srcChainId: holesky.id,
+    destChainId: baseSepolia.id,
     deposit: { amount: parseEther('0.1'), isNative: true },
     expense: { isNative: true },
     mode: 'expense',
@@ -195,10 +137,7 @@ function Quote() {
       <Heading title="Quote" />
       {account?.address ? (
         <>
-          <h4>Quote swap amount</h4>
-          <div>isSuccess: {quote.isSuccess}</div>
-          <div>isPending: {quote.isPending}</div>
-          <div>isError: {quote.isError}</div>
+          <h4>Quote swap from connected wallet to privy wallet</h4>
           <div>
             quote.deposit.amount:{' '}
             {quote.isSuccess ? formatEther(quote.deposit.amount) : ''}
@@ -216,28 +155,51 @@ function Quote() {
 }
 
 function Order() {
-  const expectedSrcChainId = baseSepolia.id
+  const { ready, authenticated } = usePrivy()
+  const { wallets, ready: walletsReady } = useWallets()
   const account = useAccount()
   const { switchChain } = useSwitchChain()
+  const expectedSrcChainId = holesky.id
+  
+  const privyWallet = wallets.find((wallet) => wallet.walletClientType === 'privy')
+
   const order = useOrder({
     owner: account?.address,
-    srcChainId: baseSepolia.id,
-    destChainId: holesky.id,
+    srcChainId: holesky.id,
+    destChainId: baseSepolia.id,
     deposit: { amount: parseEther('0.1') },
     expense: {
       amount: parseEther('0.099'),
       spender: zeroAddress,
     },
-    calls: [{ target: account.address ?? '0x', value: parseEther('0.099') }],
-    validateEnabled: !!account?.address,
+    calls: [{ target: privyWallet?.address as Hex ?? '0x', value: parseEther('0.099') }],
+    validateEnabled: !!account?.address && !!privyWallet?.address,
   })
+
+  if (!ready || !walletsReady) {
+    return (
+      <div>
+        <Heading title="Order" />
+        Loading...
+      </div>
+    )
+  }
+
+  if (!authenticated) {
+    return (
+      <div>
+        <Heading title="Order" />
+        Login with privy...
+      </div>
+    )
+  }
 
   return (
     <div>
       <Heading title="Order" />
       {account?.address ? (
         <>
-          <h4>Swap .1 eth from base sepolia to holesky</h4>
+          <h4>Swap .1 eth from holesky connected wallet to base sepolia privy wallet</h4>
           <div>chainId: {account.chainId}</div>
           {expectedSrcChainId !== account.chainId && (
             <>
